@@ -1822,6 +1822,10 @@ local function start_new_run()
       orbit_queue = {},
     },
   }
+  state.debug_enabled = false
+  state.debug_history = {}
+  state.debug_skip_push = false
+  state.last_phase = state.phase
   log_event("New run started.")
   current_run_state = game_state.init_run("novice")
   current_street_state = game_state.init_street(current_run_state, current_run_state.current_street)
@@ -1836,6 +1840,13 @@ function M.load()
 end
 
 function M.update(_dt)
+  if state.last_phase ~= state.phase then
+    if state.debug_enabled and not state.debug_skip_push then
+      state.debug_history[#state.debug_history + 1] = state.last_phase
+    end
+    state.debug_skip_push = false
+    state.last_phase = state.phase
+  end
   if state.phase == "cut" then
     if state.cut.status == "aim" then
       state.cut.velocity = state.cut.velocity + state.cut.acceleration * _dt
@@ -1912,6 +1923,22 @@ end
 function M.keypressed(key)
   if key == "escape" then
     love.event.quit()
+    return
+  end
+
+  if key == "f9" then
+    state.debug_enabled = not state.debug_enabled
+    state.message = state.debug_enabled and "Debug back enabled." or "Debug back disabled."
+    return
+  end
+
+  if key == "backspace" and state.debug_enabled then
+    local prev = table.remove(state.debug_history)
+    if prev then
+      state.phase = prev
+      state.debug_skip_push = true
+      state.message = "Debug back: " .. tostring(prev)
+    end
     return
   end
 
