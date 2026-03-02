@@ -4,6 +4,8 @@ local ui = require("src.ui")
 local aunties = require("src.data.aunties")
 local side_dishes = require("src.data.side_dishes")
 local boards = require("src.data.boards")
+local Characters = require("characters")
+local CharacterSelect = require("character_select")
 
 local M = {}
 
@@ -13,6 +15,13 @@ local state = {
   base_hand_size = 6,
   hand_size_bonus = 0,
   display_round_score = 0,
+  character = nil,
+  bonus_shop_gold = 0,
+  starter_peeked = false,
+  street_failed = false,
+  last_hand_score = 0,
+  phase = "character_select",
+  screen = "character_select",
 }
 
 local function target_for_round(round_index)
@@ -91,6 +100,105 @@ local function log_event(message)
   end
   local line = os.date("%H:%M:%S") .. " | " .. message .. "\n"
   love.filesystem.append(state.log_path, line)
+end
+
+local function build_score_breakdown(hand, starter, details)
+  local breakdown = {}
+  local counts = {}
+  for _, card in ipairs(hand) do
+    counts[card.rank] = (counts[card.rank] or 0) + 1
+  end
+  if starter then
+    counts[starter.rank] = (counts[starter.rank] or 0) + 1
+  end
+
+  for _, count in pairs(counts) do
+    if count == 2 then
+      breakdown[#breakdown + 1] = { type = "pair", points = 2 }
+    elseif count == 3 then
+      breakdown[#breakdown + 1] = { type = "triple", points = 6 }
+    elseif count == 4 then
+      breakdown[#breakdown + 1] = { type = "quad", points = 12 }
+    end
+  end
+
+  if details and details.fifteens then
+    for _ = 1, #details.fifteens do
+      breakdown[#breakdown + 1] = { type = "fifteen", points = 2 }
+    end
+  end
+  if details and details.runs then
+    for i = 1, #details.runs do
+      breakdown[#breakdown + 1] = {
+        type = "run",
+        points = details.runs[i].points,
+        length = details.runs[i].points,
+      }
+    end
+  end
+  if details and details.flush then
+    breakdown[#breakdown + 1] = { type = "flush", points = details.flush.points }
+  end
+  if details and details.knobs then
+    breakdown[#breakdown + 1] = { type = "nobs", points = details.knobs.points }
+  end
+  return breakdown
+end
+
+local function clone_card(card)
+  local copy = {}
+  for k, v in pairs(card) do
+    copy[k] = v
+  end
+  return copy
+end
+
+local function score_with_tea_stain(hand, starter, character)
+  local stained = character and character.active and character.active.stained_card
+  if not stained then
+    return scoring.score_hand(hand, starter, false)
+  end
+
+  local function is_stained(card)
+    return card.suit == stained.suit and card.original_rank == stained.original_rank
+  end
+
+  local target_index = nil
+  for i = 1, #hand do
+    if is_stained(hand[i]) then
+      target_index = i
+      break
+    end
+  end
+  if not target_index then
+    if starter and is_stained(starter) then
+      local alt = clone_card(starter)
+      local best_total, best_breakdown, best_details = scoring.score_hand(hand, starter, false)
+      for rank = 1, 13 do
+        alt.rank = rank
+        local total, breakdown, details = scoring.score_hand(hand, alt, false)
+        if total > best_total then
+          best_total, best_breakdown, best_details = total, breakdown, details
+        end
+      end
+      return best_total, best_breakdown, best_details
+    end
+    return scoring.score_hand(hand, starter, false)
+  end
+
+  local best_total, best_breakdown, best_details = scoring.score_hand(hand, starter, false)
+  for rank = 1, 13 do
+    local alt_hand = {}
+    for i = 1, #hand do
+      alt_hand[i] = clone_card(hand[i])
+    end
+    alt_hand[target_index].rank = rank
+    local total, breakdown, details = scoring.score_hand(alt_hand, starter, false)
+    if total > best_total then
+      best_total, best_breakdown, best_details = total, breakdown, details
+    end
+  end
+  return best_total, best_breakdown, best_details
 end
 
 local function count_selected(selection)
@@ -442,6 +550,66 @@ local function confirm_cancel_rect()
   return { x = 130, y = 610, w = 90, h = 28 }
 end
 
+local function active_button_rect()
+  return { x = 370, y = 610, w = 180, h = 28 }
+end
+
+local function history_button_rect()
+  return { x = 560, y = 610, w = 110, h = 28 }
+end
+
+local function character_state_view()
+  return setmetatable({ phase = state.character_phase or state.phase }, {
+    __index = state,
+    __newindex = state,
+  })
+end
+
+local function active_can_trigger()
+  if not state.character or not state.character.active or not state.character.active.canTrigger then
+    return false
+  end
+  return state.character.active.canTrigger(state.character.active, character_state_view())
+end
+
+local function trigger_active()
+  if not state.character or not state.character.active then
+    return
+  end
+  local view = character_state_view()
+  if not state.character.active.canTrigger(state.character.active, view) then
+    return
+  end
+  local result = state.character.active.onActivate(state.character.active, view)
+  if type(result) == "number" then
+    state.current_round_score = state.current_round_score + result
+    state.display_round_score = state.current_round_score
+    state.message = state.character.active.name .. ": +" .. tostring(result)
+    return
+  end
+  if result == "swap_one" then
+    state.active_use = { mode = "swap_one" }
+    reset_selection()
+    state.phase = "active_target"
+    state.message = "Pick a card to swap with the top of your deck."
+    return
+  end
+  if result == "pick_tea_stain" then
+    state.active_use = { mode = "pick_tea_stain" }
+    reset_selection()
+    state.phase = "active_target"
+    state.message = "Pick a card to tea-stain permanently."
+    return
+  end
+  if result == "peek_starter" then
+    if #state.deck > 0 then
+      state.message = "Peeked: " .. cards.card_label(state.deck[#state.deck])
+    else
+      state.message = "No cards left to peek."
+    end
+  end
+end
+
 local function build_combo_entries(details)
   local entries = {}
   if details and details.fifteens then
@@ -625,10 +793,14 @@ function M.start_round()
   state.current_round_score = 0
   state.display_round_score = 0
   state.hand_scores = {}
+  state.hand_history = {}
   state.last_hand = nil
   state.discard_pile = {}
   state.round_reward = nil
   state.reward_breakdown = nil
+  state.character_phase = "discard"
+  state.street_failed = false
+  state.starter_peeked = false
   state.objective = {
     label = "Score a fifteen every hand this round",
     failed = false,
@@ -638,6 +810,9 @@ function M.start_round()
   state.phase = "select_hand"
   state.message = nil
   reset_selection()
+  if state.character then
+    Characters.onStreetStart(state.character, state)
+  end
 end
 
 function M.load()
@@ -656,9 +831,17 @@ function M.load()
   state.dish_pool = flatten_dishes()
   state.round_index = 1
   state.target_score = target_for_round(state.round_index)
+  state.character = nil
+  state.bonus_shop_gold = 0
+  state.starter_peeked = false
+  state.street_failed = false
+  state.last_hand_score = 0
+  state.character_phase = "discard"
+  state.phase = "character_select"
+  state.screen = "character_select"
+  CharacterSelect.selected = 1
   begin_run_log()
   log_event("Run start. Money=$" .. tostring(state.money))
-  M.start_round()
 end
 
 function M.update(_dt)
@@ -677,6 +860,16 @@ end
 function M.keypressed(key)
   if key == "escape" then
     love.event.quit()
+    return
+  end
+
+  if state.phase == "character_select" then
+    local result = CharacterSelect.keypressed(key, state)
+    if result == "start_run" then
+      state.phase = "select_hand"
+      state.screen = "game"
+      M.start_round()
+    end
     return
   end
 
@@ -843,6 +1036,15 @@ function M.keypressed(key)
       reset_selection()
       return
     end
+    if key == "h" and state.phase == "select_hand" then
+      state.history_return_phase = state.phase
+      state.phase = "hand_history"
+      return
+    end
+    if key == "a" and state.phase == "select_hand" and active_can_trigger() then
+      trigger_active()
+      return
+    end
     if state.phase == "inventory_target" then
       if key == "b" then
         state.inventory_use = nil
@@ -868,6 +1070,9 @@ function M.keypressed(key)
         state.phase = "inventory"
         return
       end
+      return
+    end
+    if state.phase == "select_hand" and state.active_use then
       return
     end
     if key == "d" then
@@ -916,9 +1121,18 @@ function M.keypressed(key)
       end
       local picked = collect_selected_cards(state.player_hand, state.selected_cards)
       local picked_indices = collect_selected_indices(state.selected_cards)
-      local total, breakdown, details = scoring.score_hand(picked, state.starter_card, false)
+      local total, breakdown, details = score_with_tea_stain(picked, state.starter_card, state.character)
+      local score_breakdown = build_score_breakdown(picked, state.starter_card, details)
+      if state.character then
+        local bonus = Characters.applyPassive(state.character, score_breakdown, state)
+        if bonus > 0 then
+          breakdown[#breakdown + 1] = "Character bonus: +" .. tostring(bonus)
+          total = total + bonus
+        end
+      end
       local before = state.current_round_score or 0
       state.current_round_score = state.current_round_score + total
+      state.last_hand_score = total
       state.score_anim = {
         from = before,
         to = state.current_round_score,
@@ -928,6 +1142,7 @@ function M.keypressed(key)
         duration = 0.35,
       }
       state.hand_scores[#state.hand_scores + 1] = { total = total, breakdown = breakdown, details = details }
+      state.hand_history[#state.hand_history + 1] = { cards = picked }
       state.last_hand = {
         cards = picked,
         total = total,
@@ -955,6 +1170,7 @@ function M.keypressed(key)
       state.hands_remaining = state.hands_remaining - 1
       log_event("Hand scored: +" .. tostring(total) .. " (round total " .. tostring(state.current_round_score) .. ")")
       state.phase = "score_hand"
+      state.character_phase = "score"
       state.message = nil
       reset_selection()
       return
@@ -985,7 +1201,59 @@ function M.keypressed(key)
       state.inventory_use = nil
       reset_selection()
       state.phase = "select_hand"
+      state.character_phase = "discard"
       state.message = msg
+      return
+    end
+  elseif state.phase == "active_target" then
+    local index = tonumber(key)
+    if index and index >= 1 and index <= #state.player_hand then
+      if state.selected_cards[index] then
+        state.selected_cards[index] = false
+      else
+        if count_selected(state.selected_cards) >= 1 then
+          state.message = "Select exactly 1 card."
+        else
+          state.selected_cards[index] = true
+        end
+      end
+      return
+    end
+    if key == "return" then
+      if count_selected(state.selected_cards) ~= 1 then
+        state.message = "Select exactly 1 card."
+        return
+      end
+      local target_index = single_selected_index(state.selected_cards)
+      if state.active_use and state.active_use.mode == "swap_one" then
+        local card = state.player_hand[target_index]
+        if card and #state.deck > 0 then
+          state.player_hand[target_index] = table.remove(state.deck)
+          state.deck[#state.deck + 1] = card
+        end
+      elseif state.active_use and state.active_use.mode == "pick_tea_stain" then
+        local card = state.player_hand[target_index]
+        if card then
+          card.original_rank = card.original_rank or card.rank
+          state.character.active.stained_card = {
+            suit = card.suit,
+            original_rank = card.original_rank,
+          }
+        end
+      end
+      state.active_use = nil
+      reset_selection()
+      state.phase = "select_hand"
+      state.character_phase = "discard"
+      state.message = "Ability applied."
+      return
+    end
+    if key == "n" or key == "b" then
+      state.active_use = nil
+      reset_selection()
+      state.phase = "select_hand"
+      state.character_phase = "discard"
+      state.message = "Cancelled."
       return
     end
   elseif state.phase == "score_hand" then
@@ -1010,11 +1278,24 @@ function M.keypressed(key)
       end
       if state.hands_remaining > 0 then
         state.phase = "select_hand"
+        state.character_phase = "discard"
       else
         state.display_round_score = state.current_round_score
         state.score_anim = nil
+        state.street_failed = state.current_round_score < state.target_score
         state.phase = "round_end"
       end
+      return
+    end
+    if key == "h" then
+      state.history_return_phase = state.phase
+      state.phase = "hand_history"
+      return
+    end
+  elseif state.phase == "hand_history" then
+    if key == "b" or key == "h" or key == "return" then
+      state.phase = state.history_return_phase or "select_hand"
+      state.history_return_phase = nil
       return
     end
   elseif state.phase == "shop" then
@@ -1067,6 +1348,11 @@ function M.keypressed(key)
   elseif state.phase == "round_end" then
     if key == "return" then
       if state.current_round_score >= state.target_score then
+        if state.bonus_shop_gold and state.bonus_shop_gold > 0 then
+          state.money = state.money + state.bonus_shop_gold
+          log_event("Character shop bonus: +$" .. tostring(state.bonus_shop_gold))
+          state.bonus_shop_gold = 0
+        end
         state.round_index = state.round_index + 1
         state.target_score = target_for_round(state.round_index)
         state.shop = {
@@ -1074,6 +1360,7 @@ function M.keypressed(key)
           dish_stock = pick_random(state.dish_pool, 3),
         }
         state.phase = "shop"
+        state.character_phase = "shop"
       end
       return
     end
@@ -1083,11 +1370,25 @@ function M.keypressed(key)
       M.start_round()
       return
     end
+    if key == "a" and active_can_trigger() then
+      trigger_active()
+      return
+    end
   end
 end
 
 function M.mousepressed(x, y, button)
   if button ~= 1 then
+    return
+  end
+
+  if state.phase == "character_select" then
+    local result = CharacterSelect.mousepressed(x, y, button, state)
+    if result == "start_run" then
+      state.phase = "select_hand"
+      state.screen = "game"
+      M.start_round()
+    end
     return
   end
 
@@ -1114,9 +1415,21 @@ function M.mousepressed(x, y, button)
       M.keypressed("s")
       return
     end
+    if point_in_rect(x, y, history_button_rect()) then
+      M.keypressed("h")
+      return
+    end
+    if active_can_trigger() and point_in_rect(x, y, active_button_rect()) then
+      trigger_active()
+      return
+    end
   elseif state.phase == "score_hand" then
     if point_in_rect(x, y, enter_button_rect()) then
       M.keypressed("return")
+      return
+    end
+    if point_in_rect(x, y, history_button_rect()) then
+      M.keypressed("h")
       return
     end
   elseif state.phase == "inventory_target" then
@@ -1178,16 +1491,62 @@ function M.mousepressed(x, y, button)
         return
       end
     end
+  elseif state.phase == "active_target" then
+    local index = hand_index_at(x, y, 30, 300, #state.player_hand)
+    if index then
+      M.keypressed(tostring(index))
+      return
+    end
+    if point_in_rect(x, y, confirm_accept_rect()) then
+      M.keypressed("return")
+      return
+    end
+    if point_in_rect(x, y, confirm_cancel_rect()) then
+      M.keypressed("n")
+      return
+    end
+  elseif state.phase == "round_end" then
+    if active_can_trigger() and point_in_rect(x, y, active_button_rect()) then
+      trigger_active()
+      return
+    end
+  elseif state.phase == "hand_history" then
+    if point_in_rect(x, y, history_button_rect()) or point_in_rect(x, y, enter_button_rect()) then
+      M.keypressed("h")
+      return
+    end
   end
 end
 
 function M.draw()
+  if state.phase == "character_select" then
+    CharacterSelect.draw()
+    return
+  end
+  if state.phase == "select_hand" then
+    state.character_phase = "discard"
+  elseif state.phase == "score_hand" or state.phase == "round_end" then
+    state.character_phase = "score"
+  elseif state.phase == "shop" then
+    state.character_phase = "shop"
+  end
   draw_top_bar()
   draw_starter()
   draw_round_score_display()
   draw_board_panel()
   draw_family_panel()
   love.graphics.setColor(1, 1, 1)
+
+  if state.character then
+    local screen_w = love.graphics.getWidth()
+    local screen_h = love.graphics.getHeight()
+    local card_w, card_h = CharacterSelect.card_dimensions()
+    local scale = 1
+    local padding = 20
+    local x = screen_w - (card_w * scale) - padding
+    local y = screen_h - (card_h * scale) - padding
+    CharacterSelect.draw_card(state.character, x, y, scale, false)
+  end
 
   if state.phase == "select_hand" then
     love.graphics.print("Select 4 cards. Enter=score, D=discard (1-" .. tostring(state.discards_remaining) .. "), I=inventory use, R=rank sort, S=suit sort.", 30, 260)
@@ -1200,6 +1559,14 @@ function M.draw()
     love.graphics.print("Rank sort", rank_button.x + 8, rank_button.y + 5)
     love.graphics.rectangle("line", suit_button.x, suit_button.y, suit_button.w, suit_button.h, 6, 6)
     love.graphics.print("Suit sort", suit_button.x + 8, suit_button.y + 5)
+    local history = history_button_rect()
+    love.graphics.rectangle("line", history.x, history.y, history.w, history.h, 6, 6)
+    love.graphics.print("History", history.x + 12, history.y + 5)
+    if active_can_trigger() then
+      local active = active_button_rect()
+      love.graphics.rectangle("line", active.x, active.y, active.w, active.h, 6, 6)
+      love.graphics.print(state.character.active.name, active.x + 8, active.y + 5)
+    end
     if state.objective then
       local tally = state.objective.complete and "1/1" or "0/1"
       love.graphics.print("Objective: " .. state.objective.label .. " (" .. tally .. ")", 30, 230)
@@ -1221,10 +1588,22 @@ function M.draw()
     love.graphics.print("Accept", accept.x + 12, accept.y + 5)
     love.graphics.rectangle("line", cancel.x, cancel.y, cancel.w, cancel.h, 6, 6)
     love.graphics.print("Cancel", cancel.x + 12, cancel.y + 5)
+  elseif state.phase == "active_target" then
+    love.graphics.print(state.message or "Select target card.", 30, 260)
+    ui.draw_hand(state.player_hand, 30, 300, state.selected_cards)
+    local accept = confirm_accept_rect()
+    local cancel = confirm_cancel_rect()
+    love.graphics.rectangle("line", accept.x, accept.y, accept.w, accept.h, 6, 6)
+    love.graphics.print("Accept", accept.x + 12, accept.y + 5)
+    love.graphics.rectangle("line", cancel.x, cancel.y, cancel.w, cancel.h, 6, 6)
+    love.graphics.print("Cancel", cancel.x + 12, cancel.y + 5)
   elseif state.phase == "score_hand" then
     love.graphics.print("Hand scored. Press Enter to continue.", 30, 260)
     love.graphics.rectangle("line", 30, 610, 90, 28, 6, 6)
     love.graphics.print("Enter", 50, 615)
+    local history = history_button_rect()
+    love.graphics.rectangle("line", history.x, history.y, history.w, history.h, 6, 6)
+    love.graphics.print("History", history.x + 12, history.y + 5)
     if state.objective then
       local tally = state.objective.complete and "1/1" or "0/1"
       love.graphics.print("Objective: " .. state.objective.label .. " (" .. tally .. ")", 30, 230)
@@ -1270,6 +1649,15 @@ function M.draw()
       end
     else
       love.graphics.print("Failed. Press R to restart.", 30, 360)
+      if state.character and state.character.death_text then
+        ui.draw_text_block({ state.character.death_text }, 30, 390)
+      end
+      if active_can_trigger() then
+        local active = active_button_rect()
+        love.graphics.rectangle("line", active.x, active.y, active.w, active.h, 6, 6)
+        love.graphics.print(state.character.active.name, active.x + 8, active.y + 5)
+        love.graphics.print("Press A or click to use ability.", active.x + active.w + 12, active.y + 5)
+      end
     end
   elseif state.phase == "shop" then
     love.graphics.print("Shop - Money: $" .. tostring(state.money) .. " (Enter to continue)", 30, 260)
@@ -1344,6 +1732,15 @@ function M.draw()
     local per_page = 9
     local start_index, end_index = draw_card_page(state.deck, page, per_page, 30, 300)
     love.graphics.print("Showing " .. tostring(start_index) .. "-" .. tostring(end_index) .. " (N/P to page, B to close)", 30, 430)
+  elseif state.phase == "hand_history" then
+    love.graphics.print("Hand History (this round)", 30, 260)
+    love.graphics.print("Press H/B/Enter to return.", 30, 280)
+    local y = 320
+    for i = 1, #state.hand_history do
+      love.graphics.print("Hand " .. tostring(i) .. ":", 30, y)
+      ui.draw_cards_row(state.hand_history[i].cards, 120, y - 10)
+      y = y + 80
+    end
   end
 
   if state.message then
