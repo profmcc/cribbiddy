@@ -2,6 +2,7 @@ local cards = require("src.cards")
 local scoring = require("src.scoring")
 local ui = require("src.ui")
 local data = require("src.data")
+local balatro_mode = require("game_modes.balatro_mode")
 
 local GOAL_SCORE = 121
 local CUT_CLEAR_ABOVE = 0.25
@@ -11,6 +12,7 @@ local CUT_CLEAR_BELOW = 0.25
 local CUT_SLIDE = 0.5
 
 local M = {}
+local USE_BALATRO_MODE = true
 
 local state = {}
 
@@ -1616,12 +1618,20 @@ local function start_new_run()
 end
 
 function M.load()
+  if USE_BALATRO_MODE then
+    balatro_mode.load()
+    return
+  end
   love.graphics.setBackgroundColor(0.12, 0.12, 0.16)
   ui.set_font()
   start_new_run()
 end
 
 function M.update(_dt)
+  if USE_BALATRO_MODE then
+    balatro_mode.update(_dt)
+    return
+  end
   if state.phase == "cut" then
     if state.cut.status == "aim" then
       state.cut.velocity = state.cut.velocity + state.cut.acceleration * _dt
@@ -1696,6 +1706,10 @@ function M.update(_dt)
 end
 
 function M.keypressed(key)
+  if USE_BALATRO_MODE then
+    balatro_mode.keypressed(key)
+    return
+  end
   if key == "escape" then
     love.event.quit()
     return
@@ -2163,7 +2177,16 @@ function M.keypressed(key)
   end
 end
 
-function M.draw()
+function M.mousepressed(x, y, button)
+  if USE_BALATRO_MODE then
+    if balatro_mode.mousepressed then
+      balatro_mode.mousepressed(x, y, button)
+    end
+    return
+  end
+end
+
+function M._draw()
   ui.draw_scoreboard(state)
   ui.draw_phase(state.phase, 30, 130)
   ui.draw_text_block({ state.message or "" }, 30, 160)
@@ -2494,6 +2517,14 @@ function M.draw()
   elseif state.phase == "run_end" then
     love.graphics.print("Final level: " .. tostring(state.level), 30, 240)
   end
+end
+
+function M.draw()
+  if USE_BALATRO_MODE then
+    balatro_mode.draw()
+    return
+  end
+  M._draw()
 end
 
 return M
