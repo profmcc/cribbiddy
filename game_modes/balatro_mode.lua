@@ -216,29 +216,50 @@ local function most_common_rank_in_hand(hand, exclude_index)
 end
 
 local function apply_uncle(item, target_index)
-  local card = state.player_hand[target_index]
-  if not card then
-    return false, "No card selected."
-  end
-  if card.locked or card.eternal then
-    return false, "That card can't be transformed."
-  end
   if state.money < (item.cost or 0) then
     return false, "Not enough money for " .. item.name .. "."
   end
 
   local name = item.id
   if name == "uncle_bramble" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     card.rank = 5
   elseif name == "uncle_cedar" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     card.rank = math.min(card.rank + 1, 13)
   elseif name == "uncle_oakley" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     local rank = most_common_rank_in_hand(state.player_hand, target_index)
     if not rank then
       return false, "No matching rank available."
     end
     card.rank = rank
   elseif name == "uncle_birch" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     local choices = { 10, 11, 12, 13 }
     card.rank = choices[love.math.random(#choices)]
   elseif name == "uncle_sage" then
@@ -251,12 +272,40 @@ local function apply_uncle(item, target_index)
   elseif name == "uncle_ash" then
     card.enhancement = "golden_card"
   elseif name == "uncle_rowan" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     card.suit = 4
   elseif name == "uncle_sycamore" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     card.suit = 2
   elseif name == "uncle_cypress" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     card.suit = 3
   elseif name == "uncle_elm" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     card.suit = 1
   elseif name == "uncle_hickory" then
     for _ = 1, math.min(2, #state.deck) do
@@ -264,17 +313,35 @@ local function apply_uncle(item, target_index)
     end
     state.money = state.money + 4
   elseif name == "uncle_willow" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     local target_rank = card.rank
     for i = 1, #state.player_hand do
       state.player_hand[i].rank = target_rank
     end
   elseif name == "uncle_chestnut" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
+    if card.locked or card.eternal then
+      return false, "That card can't be transformed."
+    end
     card.enhancement = "toy_card"
   elseif name == "uncle_alder" then
     for i = 1, #state.player_hand do
       state.player_hand[i].rank = love.math.random(1, 13)
     end
   elseif name == "uncle_linden" then
+    local card = state.player_hand[target_index]
+    if not card then
+      return false, "No card selected."
+    end
     state.deck[#state.deck + 1] = { rank = card.rank, suit = card.suit }
   else
     return false, "That Uncle's effect isn't available yet."
@@ -335,6 +402,43 @@ end
 
 local function enter_button_rect()
   return { x = 30, y = 610, w = 90, h = 28 }
+end
+
+local function sort_rank_button_rect()
+  return { x = 130, y = 610, w = 110, h = 28 }
+end
+
+local function sort_suit_button_rect()
+  return { x = 250, y = 610, w = 110, h = 28 }
+end
+
+local function shop_family_item_rect(index)
+  local y = 320 + (index - 1) * 18
+  return { x = 30, y = y, w = 170, h = 18 }
+end
+
+local function shop_dish_item_rect(index, family_count)
+  local base = 320 + (family_count * 18) + 48
+  local y = base + (index - 1) * 18
+  return { x = 30, y = y, w = 170, h = 18 }
+end
+
+local function inventory_family_item_rect(index)
+  local y = 320 + (index - 1) * 18
+  return { x = 30, y = y, w = 420, h = 18 }
+end
+
+local function inventory_dish_item_rect(index, family_count)
+  local y = 320 + (family_count * 18) + 48 + (index - 1) * 18
+  return { x = 30, y = y, w = 420, h = 18 }
+end
+
+local function confirm_accept_rect()
+  return { x = 30, y = 610, w = 90, h = 28 }
+end
+
+local function confirm_cancel_rect()
+  return { x = 130, y = 610, w = 90, h = 28 }
 end
 
 local function build_combo_entries(details)
@@ -411,6 +515,8 @@ local function draw_top_bar()
   love.graphics.print("Hands: " .. tostring(state.hands_remaining or 0), 430, 20)
   love.graphics.print("Round Score: " .. tostring(state.current_round_score or 0), 560, 20)
   love.graphics.print("Target: " .. tostring(state.target_score or 0), 760, 20)
+  local inv = inventory_hitbox()
+  love.graphics.rectangle("line", inv.x - 6, inv.y - 4, inv.w + 12, inv.h + 8, 6, 6)
   love.graphics.print("Inventory (I)", 900, 20)
 end
 
@@ -438,8 +544,8 @@ local function draw_board_panel()
 end
 
 local function draw_family_panel()
-  love.graphics.print("Family (" .. tostring(#state.family) .. "/" .. tostring(state.family_slots) .. "):", 520, 240)
-  local y = 260
+  love.graphics.print("Family (" .. tostring(#state.family) .. "/" .. tostring(state.family_slots) .. "):", 520, 320)
+  local y = 340
   for i = 1, #state.family do
     local item = state.auntie_lookup[state.family[i]]
     if item then
@@ -628,11 +734,6 @@ function M.keypressed(key)
   if state.phase == "inventory" then
     local index = tonumber(key)
     if index then
-      local target_index = single_selected_index(state.selected_cards)
-      if not target_index then
-        state.message = "Select exactly 1 card to target."
-        return
-      end
       if index >= 1 and index <= #state.family then
         local family_id = state.family[index]
         local item = state.auntie_lookup[family_id]
@@ -644,18 +745,28 @@ function M.keypressed(key)
           state.message = item.name .. " is passive."
           return
         end
-        local ok, msg = apply_uncle(item, target_index)
-        state.message = msg
+        state.inventory_use = {
+          kind = "uncle",
+          item = item,
+          requires_card = item.id ~= "uncle_sage" and item.id ~= "uncle_hickory" and item.id ~= "uncle_alder",
+        }
+        reset_selection()
+        state.phase = "inventory_target"
+        state.message = "Select card(s) for " .. item.name .. "."
         return
       end
       local dish_index = index - #state.family
       if dish_index >= 1 and dish_index <= #state.side_pouch then
         local dish = state.side_pouch[dish_index]
-        local ok, msg = apply_side_dish(dish, target_index)
-        if ok then
-          table.remove(state.side_pouch, dish_index)
-        end
-        state.message = msg
+        state.inventory_use = {
+          kind = "dish",
+          item = dish,
+          index = dish_index,
+          requires_card = true,
+        }
+        reset_selection()
+        state.phase = "inventory_target"
+        state.message = "Select card(s) for " .. dish.name .. "."
         return
       end
     end
@@ -667,7 +778,7 @@ function M.keypressed(key)
     return
   end
 
-  if state.phase == "select_hand" then
+  if state.phase == "select_hand" or state.phase == "inventory_target" then
     local index = tonumber(key)
     if index and index >= 1 and index <= #state.player_hand then
       if state.player_hand[index] and state.player_hand[index].pinned then
@@ -693,6 +804,33 @@ function M.keypressed(key)
     if key == "s" then
       sort_hand_by_suit(state.player_hand)
       reset_selection()
+      return
+    end
+    if state.phase == "inventory_target" then
+      if key == "b" then
+        state.inventory_use = nil
+        reset_selection()
+        state.phase = "inventory"
+        return
+      end
+      if key == "return" then
+        if state.inventory_use and state.inventory_use.requires_card then
+          local count = count_selected(state.selected_cards)
+          if count ~= 1 then
+            state.message = "Select exactly 1 card."
+            return
+          end
+        end
+        state.phase = "inventory_confirm"
+        state.message = "Confirm use? Enter=accept, N=cancel."
+        return
+      end
+      if key == "n" then
+        state.inventory_use = nil
+        reset_selection()
+        state.phase = "inventory"
+        return
+      end
       return
     end
     if key == "d" then
@@ -773,6 +911,35 @@ function M.keypressed(key)
       state.phase = "score_hand"
       state.message = nil
       reset_selection()
+      return
+    end
+  elseif state.phase == "inventory_confirm" then
+    if key == "n" then
+      reset_selection()
+      state.phase = "inventory"
+      state.message = "Cancelled."
+      return
+    end
+    if key == "return" then
+      local target_index = single_selected_index(state.selected_cards)
+      local use = state.inventory_use
+      if not use then
+        state.phase = "inventory"
+        return
+      end
+      local ok, msg = false, "Invalid inventory use."
+      if use.kind == "uncle" then
+        ok, msg = apply_uncle(use.item, target_index)
+      elseif use.kind == "dish" then
+        ok, msg = apply_side_dish(use.item, target_index)
+        if ok and use.index then
+          table.remove(state.side_pouch, use.index)
+        end
+      end
+      state.inventory_use = nil
+      reset_selection()
+      state.phase = "select_hand"
+      state.message = msg
       return
     end
   elseif state.phase == "score_hand" then
@@ -887,10 +1054,77 @@ function M.mousepressed(x, y, button)
       M.keypressed("return")
       return
     end
+    if point_in_rect(x, y, sort_rank_button_rect()) then
+      M.keypressed("r")
+      return
+    end
+    if point_in_rect(x, y, sort_suit_button_rect()) then
+      M.keypressed("s")
+      return
+    end
   elseif state.phase == "score_hand" then
     if point_in_rect(x, y, enter_button_rect()) then
       M.keypressed("return")
       return
+    end
+  elseif state.phase == "inventory_target" then
+    local index = hand_index_at(x, y, 30, 300, #state.player_hand)
+    if index then
+      M.keypressed(tostring(index))
+      return
+    end
+    if point_in_rect(x, y, confirm_accept_rect()) then
+      M.keypressed("return")
+      return
+    end
+    if point_in_rect(x, y, confirm_cancel_rect()) then
+      M.keypressed("n")
+      return
+    end
+  elseif state.phase == "inventory_confirm" then
+    if point_in_rect(x, y, confirm_accept_rect()) then
+      M.keypressed("return")
+      return
+    end
+    if point_in_rect(x, y, confirm_cancel_rect()) then
+      M.keypressed("n")
+      return
+    end
+  elseif state.phase == "inventory" then
+    local family_count = #state.family
+    for i = 1, family_count do
+      if point_in_rect(x, y, inventory_family_item_rect(i)) then
+        M.keypressed(tostring(i))
+        return
+      end
+    end
+    for i = 1, #state.side_pouch do
+      if point_in_rect(x, y, inventory_dish_item_rect(i, family_count)) then
+        M.keypressed(tostring(i + family_count))
+        return
+      end
+    end
+  elseif state.phase == "shop" then
+    if not state.shop then
+      return
+    end
+    if point_in_rect(x, y, enter_button_rect()) then
+      M.keypressed("return")
+      return
+    end
+    local family_count = #state.shop.family_stock
+    for i = 1, family_count do
+      if point_in_rect(x, y, shop_family_item_rect(i)) then
+        M.keypressed(tostring(i))
+        return
+      end
+    end
+    local dish_count = #state.shop.dish_stock
+    for i = 1, dish_count do
+      if point_in_rect(x, y, shop_dish_item_rect(i, family_count)) then
+        M.keypressed(tostring(i + family_count))
+        return
+      end
     end
   end
 end
@@ -908,10 +1142,33 @@ function M.draw()
     ui.draw_hand(state.player_hand, 30, 300, state.selected_cards)
     love.graphics.rectangle("line", 30, 610, 90, 28, 6, 6)
     love.graphics.print("Enter", 50, 615)
+    local rank_button = sort_rank_button_rect()
+    local suit_button = sort_suit_button_rect()
+    love.graphics.rectangle("line", rank_button.x, rank_button.y, rank_button.w, rank_button.h, 6, 6)
+    love.graphics.print("Rank sort", rank_button.x + 8, rank_button.y + 5)
+    love.graphics.rectangle("line", suit_button.x, suit_button.y, suit_button.w, suit_button.h, 6, 6)
+    love.graphics.print("Suit sort", suit_button.x + 8, suit_button.y + 5)
     if state.objective then
       local tally = state.objective.complete and "1/1" or "0/1"
       love.graphics.print("Objective: " .. state.objective.label .. " (" .. tally .. ")", 30, 230)
     end
+  elseif state.phase == "inventory_target" then
+    love.graphics.print("Select target card(s). Enter to confirm, N to cancel.", 30, 260)
+    ui.draw_hand(state.player_hand, 30, 300, state.selected_cards)
+    local accept = confirm_accept_rect()
+    local cancel = confirm_cancel_rect()
+    love.graphics.rectangle("line", accept.x, accept.y, accept.w, accept.h, 6, 6)
+    love.graphics.print("Accept", accept.x + 12, accept.y + 5)
+    love.graphics.rectangle("line", cancel.x, cancel.y, cancel.w, cancel.h, 6, 6)
+    love.graphics.print("Cancel", cancel.x + 12, cancel.y + 5)
+  elseif state.phase == "inventory_confirm" then
+    love.graphics.print("Confirm use? Enter=accept, N=cancel.", 30, 260)
+    local accept = confirm_accept_rect()
+    local cancel = confirm_cancel_rect()
+    love.graphics.rectangle("line", accept.x, accept.y, accept.w, accept.h, 6, 6)
+    love.graphics.print("Accept", accept.x + 12, accept.y + 5)
+    love.graphics.rectangle("line", cancel.x, cancel.y, cancel.w, cancel.h, 6, 6)
+    love.graphics.print("Cancel", cancel.x + 12, cancel.y + 5)
   elseif state.phase == "score_hand" then
     love.graphics.print("Hand scored. Press Enter to continue.", 30, 260)
     love.graphics.rectangle("line", 30, 610, 90, 28, 6, 6)
@@ -982,6 +1239,8 @@ function M.draw()
       love.graphics.print(item.effect, 220, y)
       y = y + 18
     end
+    love.graphics.rectangle("line", 30, 610, 90, 28, 6, 6)
+    love.graphics.print("Enter", 50, 615)
   elseif state.phase == "inventory" then
     love.graphics.print("Inventory (press I or B to return)", 30, 260)
     love.graphics.print("Family (" .. tostring(#state.family) .. "/" .. tostring(state.family_slots) .. "):", 30, 290)
