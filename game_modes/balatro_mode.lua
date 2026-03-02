@@ -9,17 +9,18 @@ local M = {}
 
 local state = {
   round_index = 1,
-  target_score = 48,
-  base_hand_size = 9,
+  target_score = 36,
+  base_hand_size = 6,
   hand_size_bonus = 0,
+  display_round_score = 0,
 }
 
 local function target_for_round(round_index)
-  return 48 + (round_index - 1) * 8
+  return 36 + (round_index - 1) * 6
 end
 
 local function discards_for_round(_round_index)
-  return 9
+  return 6
 end
 
 local function current_hand_size()
@@ -513,7 +514,7 @@ local function draw_top_bar()
   love.graphics.print("Money: $" .. tostring(state.money or 0), 150, 20)
   love.graphics.print("Discards: " .. tostring(state.discards_remaining or 0), 280, 20)
   love.graphics.print("Hands: " .. tostring(state.hands_remaining or 0), 430, 20)
-  love.graphics.print("Round Score: " .. tostring(state.current_round_score or 0), 560, 20)
+  love.graphics.print("Round Score: " .. tostring(state.display_round_score or state.current_round_score or 0), 560, 20)
   love.graphics.print("Target: " .. tostring(state.target_score or 0), 760, 20)
   local inv = inventory_hitbox()
   love.graphics.rectangle("line", inv.x - 6, inv.y - 4, inv.w + 12, inv.h + 8, 6, 6)
@@ -563,13 +564,39 @@ local function draw_starter()
   ui.draw_face_up_card(state.starter_card, 30, 130)
 end
 
-local function draw_discard_top()
-  if not state.discard_pile or #state.discard_pile == 0 then
-    return
+local function get_big_font()
+  if not state.big_font then
+    state.big_font = love.graphics.newFont(48)
   end
-  local card = state.discard_pile[#state.discard_pile]
-  love.graphics.print("Discard (top)", 160, 110)
-  ui.draw_face_up_card(card, 160, 130)
+  return state.big_font
+end
+
+local function draw_round_score_display()
+  local font = love.graphics.getFont()
+  local big = get_big_font()
+  love.graphics.setFont(big)
+  local base_x = 220
+  local base_y = 130
+  local display_value = state.display_round_score or 0
+  local label = tostring(display_value)
+
+  if state.score_anim and state.score_anim.phase == "slide_in" then
+    local t = math.min(1, state.score_anim.timer / state.score_anim.duration)
+    local start_y = base_y + 40
+    local draw_y = start_y + (base_y - start_y) * t
+    label = tostring(state.score_anim.to)
+    love.graphics.print(label, base_x, draw_y)
+  else
+    love.graphics.print(label, base_x, base_y)
+  end
+
+  if state.score_anim and state.score_anim.phase == "show_delta" then
+    love.graphics.setFont(font)
+    love.graphics.print("+" .. tostring(state.score_anim.delta), base_x + 10, base_y + 50)
+  end
+
+  love.graphics.setFont(font)
+  love.graphics.print("Round score", base_x, base_y - 28)
 end
 
 local function draw_card_page(cards_list, page, per_page, x, y)
@@ -596,6 +623,7 @@ function M.start_round()
   state.discards_remaining = discards_for_round(state.round_index)
   state.hands_remaining = 4
   state.current_round_score = 0
+  state.display_round_score = 0
   state.hand_scores = {}
   state.last_hand = nil
   state.discard_pile = {}
@@ -634,6 +662,15 @@ function M.load()
 end
 
 function M.update(_dt)
+  if state.score_anim then
+    if state.score_anim.phase == "slide_in" then
+      state.score_anim.timer = state.score_anim.timer + _dt
+      if state.score_anim.timer >= state.score_anim.duration then
+        state.display_round_score = state.score_anim.to
+        state.score_anim = nil
+      end
+    end
+  end
   return
 end
 
@@ -788,8 +825,8 @@ function M.keypressed(key)
       if state.selected_cards[index] then
         state.selected_cards[index] = false
       else
-        if count_selected(state.selected_cards) >= 6 then
-          state.message = "Select up to 6 cards to score."
+        if count_selected(state.selected_cards) >= 4 then
+          state.message = "Select exactly 4 cards to score."
         else
           state.selected_cards[index] = true
         end
@@ -873,14 +910,23 @@ function M.keypressed(key)
     end
     if key == "return" then
       local count = count_selected(state.selected_cards)
-      if count < 1 or count > 6 then
-        state.message = "Select 1-6 cards to score."
+      if count ~= 4 then
+        state.message = "Select exactly 4 cards to score."
         return
       end
       local picked = collect_selected_cards(state.player_hand, state.selected_cards)
       local picked_indices = collect_selected_indices(state.selected_cards)
       local total, breakdown, details = scoring.score_hand(picked, state.starter_card, false)
+      local before = state.current_round_score or 0
       state.current_round_score = state.current_round_score + total
+      state.score_anim = {
+        from = before,
+        to = state.current_round_score,
+        delta = total,
+        phase = "show_delta",
+        timer = 0,
+        duration = 0.35,
+      }
       state.hand_scores[#state.hand_scores + 1] = { total = total, breakdown = breakdown, details = details }
       state.last_hand = {
         cards = picked,
@@ -944,6 +990,10 @@ function M.keypressed(key)
     end
   elseif state.phase == "score_hand" then
     if key == "return" or key == "space" then
+      if state.score_anim and state.score_anim.phase == "show_delta" then
+        state.score_anim.phase = "slide_in"
+        state.score_anim.timer = 0
+      end
       if state.hands_remaining == 0 and state.current_round_score >= state.target_score and not state.round_reward then
         local total, breakdown = calculate_round_reward(
           state.current_round_score,
@@ -961,6 +1011,8 @@ function M.keypressed(key)
       if state.hands_remaining > 0 then
         state.phase = "select_hand"
       else
+        state.display_round_score = state.current_round_score
+        state.score_anim = nil
         state.phase = "round_end"
       end
       return
@@ -1132,13 +1184,13 @@ end
 function M.draw()
   draw_top_bar()
   draw_starter()
-  draw_discard_top()
+  draw_round_score_display()
   draw_board_panel()
   draw_family_panel()
   love.graphics.setColor(1, 1, 1)
 
   if state.phase == "select_hand" then
-    love.graphics.print("Select 1-6 cards. Enter=score, D=discard (1-" .. tostring(state.discards_remaining) .. "), I=inventory use, R=rank sort, S=suit sort.", 30, 260)
+    love.graphics.print("Select 4 cards. Enter=score, D=discard (1-" .. tostring(state.discards_remaining) .. "), I=inventory use, R=rank sort, S=suit sort.", 30, 260)
     ui.draw_hand(state.player_hand, 30, 300, state.selected_cards)
     love.graphics.rectangle("line", 30, 610, 90, 28, 6, 6)
     love.graphics.print("Enter", 50, 615)
