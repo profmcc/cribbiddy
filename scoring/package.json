@@ -1,0 +1,8 @@
+{
+  "name": "cribbiddy-scoring",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test scoring.test.ts"
+  }
+}
