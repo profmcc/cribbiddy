@@ -2,7 +2,9 @@ local cards = require("src.cards")
 local scoring = require("src.scoring")
 local ui = require("src.ui")
 local data = require("src.data")
-local balatro_mode = require("game_modes.balatro_mode")
+local quota_system = require("src.systems.quota_system")
+local game_state = require("src.systems.game_state")
+local phase_objectives = require("src.systems.phase_objectives")
 
 local GOAL_SCORE = 121
 local CUT_CLEAR_ABOVE = 0.25
@@ -12,12 +14,17 @@ local CUT_CLEAR_BELOW = 0.25
 local CUT_SLIDE = 0.5
 
 local M = {}
-local USE_BALATRO_MODE = true
 
 local state = {}
 
 local log_event
 local write_history
+
+local start_round
+
+local current_run_state = nil
+local current_street_state = nil
+local prompt_state = { active = false, selected = 1, options = {} }
 
 local function copy_list(list)
   local out = {}
@@ -70,6 +77,54 @@ local function mark_street_complete()
     state.meta.completed_streets[board_id] = {}
   end
   state.meta.completed_streets[board_id][street.id] = true
+end
+
+local function get_phase_reward()
+  if not current_run_state then
+    return 0
+  end
+  if current_run_state.current_blind_type == quota_system.BLIND_TYPE.SMALL then
+    return 2
+  end
+  if current_run_state.current_blind_type == quota_system.BLIND_TYPE.BIG then
+    return 3
+  end
+  return 0
+end
+
+local function build_reward_preview()
+  if not current_street_state then
+    return "Rewards applied on end."
+  end
+  local quota_target = current_street_state.quota_target
+  local exceed_target = math.floor(quota_target * 1.5)
+  return "End now to bank rewards. Hit " .. exceed_target .. " for +1 heart."
+end
+
+local function trigger_phase_complete_feedback()
+  state.message = "Phase complete!"
+end
+
+local function add_random_side_dish()
+  local dish = pick_side_dish()
+  if dish and #state.meta.side_pouch < state.meta.side_pouch_capacity then
+    state.meta.side_pouch[#state.meta.side_pouch + 1] = dish
+  end
+end
+
+local function show_street_summary(_rewards)
+  state.message = "Street complete."
+end
+
+local function advance_to_next_street()
+  current_run_state.current_street = math.min(current_run_state.current_street + 1, 10)
+  current_street_state = game_state.init_street(current_run_state, current_run_state.current_street)
+  current_street_state.phase_objective = phase_objectives.get_random_phase(current_run_state.current_blind_type)
+  enter_street_preview()
+end
+
+local function start_new_hand()
+  start_round()
 end
 
 local function count_selected(selection)
@@ -127,7 +182,7 @@ local function ai_choose_play(hand, count, stack)
   return best_index
 end
 
-local function start_round()
+start_round = function()
   local deck = cards.shuffle(cards.build_deck({
     board_id = state.meta.board_id,
     deck_counts = state.meta.deck_counts,
@@ -1232,6 +1287,8 @@ start_pegging = function()
   state.pending_pass_key = nil
   state.player_peg_hand = copy_list(state.player_hand)
   state.ai_peg_hand = copy_list(state.ai_hand)
+  state.pegging_player_points = 0
+  state.pegging_ai_points = 0
   if state.dealer == "player" then
     state.turn = "ai"
   else
@@ -1258,6 +1315,11 @@ local function apply_go_if_needed()
   if peg.player_passed and peg.ai_passed then
     if peg.count ~= 31 and peg.last_player then
       award_points(peg.last_player, 1, "Go")
+      if peg.last_player == "player" then
+        state.pegging_player_points = (state.pegging_player_points or 0) + 1
+      else
+        state.pegging_ai_points = (state.pegging_ai_points or 0) + 1
+      end
     end
     peg.count = 0
     peg.stack = {}
@@ -1287,6 +1349,11 @@ local function play_card(player, index)
 
   if points > 0 then
     award_points(player, points, "Peg")
+    if player == "player" then
+      state.pegging_player_points = (state.pegging_player_points or 0) + points
+    else
+      state.pegging_ai_points = (state.pegging_ai_points or 0) + points
+    end
   end
   if player == "player" then
     state.pending_pass_key = nil
@@ -1356,6 +1423,128 @@ local function build_combo_entries(details)
     entries[#entries + 1] = { label = "No score" }
   end
   return entries
+end
+
+local function process_street_end(reason)
+  local heart_change, rewards = game_state.end_street(current_run_state, current_street_state)
+
+  if heart_change < 0 then
+    for _ = 1, math.abs(heart_change) do
+      local run_ended = game_state.lose_heart(current_run_state)
+      if run_ended then
+        state.phase = "run_end"
+        state.message = "Game over. Press R to restart."
+        return
+      end
+    end
+  elseif heart_change > 0 then
+    for _ = 1, heart_change do
+      game_state.gain_heart(current_run_state)
+    end
+  end
+
+  for _, reward in ipairs(rewards) do
+    if reward.type == "money" then
+      current_run_state.money = current_run_state.money + reward.amount
+    elseif reward.type == "side_dish" then
+      add_random_side_dish()
+    elseif reward.type == "retry_street" then
+      current_street_state = game_state.init_street(current_run_state, current_run_state.current_street)
+      current_street_state.phase_objective = phase_objectives.get_random_phase(current_run_state.current_blind_type)
+      start_new_hand()
+      return
+    end
+  end
+
+  local phase_required = quota_system.QUOTA_CONFIG.base[current_run_state.current_blind_type].phase_required
+  if not current_street_state.quota_met or (phase_required and not current_street_state.phase_complete) then
+    current_street_state = game_state.init_street(current_run_state, current_run_state.current_street)
+    current_street_state.phase_objective = phase_objectives.get_random_phase(current_run_state.current_blind_type)
+    enter_street_preview()
+    return
+  end
+
+  show_street_summary(rewards)
+  if should_open_shop() then
+    start_shop()
+  else
+    advance_to_next_street()
+  end
+end
+
+local function show_end_street_prompt()
+  local quota_target = current_street_state.quota_target
+  local quota_progress = current_street_state.quota_progress
+  local exceed_target = quota_target * 1.5
+  local hands_remaining = current_street_state.hands_limit - current_street_state.hands_used
+
+  local can_chase_exceed = quota_progress < exceed_target and hands_remaining > 0
+  local pegs_needed_for_exceed = exceed_target - quota_progress
+
+  prompt_state = {
+    active = true,
+    selected = 1,
+    options = {},
+  }
+
+  table.insert(prompt_state.options, {
+    text = "End Street - Collect Rewards",
+    action = function() process_street_end("player_choice") end,
+    info = build_reward_preview(),
+  })
+
+  if can_chase_exceed then
+    table.insert(prompt_state.options, {
+      text = "Keep Playing - Chase +1 Heart",
+      action = function()
+        prompt_state.active = false
+        start_new_hand()
+      end,
+      info = string.format("Need %d more pegs in %d hands", pegs_needed_for_exceed, hands_remaining),
+    })
+  end
+
+  state.phase = "quota_prompt"
+end
+
+local function on_hand_complete(hand_result)
+  game_state.add_pegs_to_quota(current_street_state, hand_result.score)
+
+  if not current_street_state.phase_complete then
+    if phase_objectives.check_phase_complete(current_street_state.phase_objective, hand_result) then
+      current_street_state.phase_complete = true
+      trigger_phase_complete_feedback()
+    end
+  end
+
+  current_street_state.hands_used = current_street_state.hands_used + 1
+
+  local status = game_state.check_quota_status(current_street_state)
+  if status == "met" or status == "exceeded_50" then
+    current_street_state.quota_met = true
+  end
+
+  local should_end = false
+  local end_reason = nil
+
+  if current_street_state.hands_used >= current_street_state.hands_limit then
+    should_end = true
+    end_reason = "hand_limit"
+  end
+
+  if current_street_state.quota_met then
+    local phase_required = quota_system.QUOTA_CONFIG.base[current_run_state.current_blind_type].phase_required
+    if current_street_state.phase_complete or not phase_required then
+      show_end_street_prompt()
+      return
+    end
+  end
+
+  if should_end then
+    process_street_end(end_reason)
+  else
+    start_new_hand()
+  end
 end
 
 local function score_show()
@@ -1506,6 +1695,41 @@ local function score_show()
       details = crib_details,
     },
   }
+  local max_run_length = 0
+  local run_count = 0
+  if player_details and player_details.runs then
+    run_count = #player_details.runs
+    for i = 1, #player_details.runs do
+      local label = player_details.runs[i].label or ""
+      local length = tonumber(label:match("Run%s+(%d+)")) or 0
+      if length > max_run_length then
+        max_run_length = length
+      end
+    end
+  end
+
+  local is_player_crib = state.dealer == "player"
+  local total_pegs = player_points + (state.pegging_player_points or 0)
+  if is_player_crib then
+    total_pegs = total_pegs + crib_points
+  else
+    total_pegs = total_pegs - crib_points
+  end
+
+  local hand_result = {
+    score = total_pegs,
+    fifteens = player_details and #player_details.fifteens or 0,
+    pairs = player_details and #player_details.pairs or 0,
+    runs = { length = max_run_length, count = run_count },
+    max_run_length = max_run_length,
+    flush = player_details and player_details.flush ~= nil,
+    pegging_score = state.pegging_player_points or 0,
+    opponent_pegging_score = state.pegging_ai_points or 0,
+    crib_score = crib_points,
+    is_player_crib = is_player_crib,
+  }
+
+  state.last_hand_result = hand_result
   log_event("Show scoring: player " .. tostring(player_points) .. ", opponent " .. tostring(ai_points) .. ", crib " .. tostring(crib_points) .. ".")
 end
 
@@ -1520,28 +1744,12 @@ local function advance_show_phase()
     state.phase = "show_summary"
     state.message = "Summary. Press Enter."
   elseif state.phase == "show_summary" then
-    mark_street_complete()
-    if state.player_score >= GOAL_SCORE then
-      state.level = state.level + 1
-      state.player_score = 0
-      state.ai_score = 0
-      state.dealer = toggle_dealer(state.dealer)
-      start_round()
+    local hand_result = state.last_hand_result
+    state.last_hand_result = nil
+    if hand_result then
+      on_hand_complete(hand_result)
       return
     end
-    if state.ai_score >= GOAL_SCORE then
-      state.phase = "run_end"
-      state.message = "Game over. Press R to restart."
-      write_history()
-      return
-    end
-    if should_open_shop() then
-      start_shop()
-      return
-    end
-    state.dealer = toggle_dealer(state.dealer)
-    advance_street()
-    enter_street_preview()
   end
 end
 
@@ -1614,23 +1822,30 @@ local function start_new_run()
       orbit_queue = {},
     },
   }
+  state.debug_enabled = false
+  state.debug_history = {}
+  state.debug_skip_push = false
+  state.last_phase = state.phase
   log_event("New run started.")
+  current_run_state = game_state.init_run("novice")
+  current_street_state = game_state.init_street(current_run_state, current_run_state.current_street)
+  current_street_state.phase_objective = phase_objectives.get_random_phase(current_run_state.current_blind_type)
+  prompt_state = { active = false, selected = 1, options = {} }
 end
 
 function M.load()
-  if USE_BALATRO_MODE then
-    balatro_mode.load()
-    return
-  end
   love.graphics.setBackgroundColor(0.12, 0.12, 0.16)
   ui.set_font()
   start_new_run()
 end
 
 function M.update(_dt)
-  if USE_BALATRO_MODE then
-    balatro_mode.update(_dt)
-    return
+  if state.last_phase ~= state.phase then
+    if state.debug_enabled and not state.debug_skip_push then
+      state.debug_history[#state.debug_history + 1] = state.last_phase
+    end
+    state.debug_skip_push = false
+    state.last_phase = state.phase
   end
   if state.phase == "cut" then
     if state.cut.status == "aim" then
@@ -1706,12 +1921,24 @@ function M.update(_dt)
 end
 
 function M.keypressed(key)
-  if USE_BALATRO_MODE then
-    balatro_mode.keypressed(key)
-    return
-  end
   if key == "escape" then
     love.event.quit()
+    return
+  end
+
+  if key == "f9" then
+    state.debug_enabled = not state.debug_enabled
+    state.message = state.debug_enabled and "Debug back enabled." or "Debug back disabled."
+    return
+  end
+
+  if key == "backspace" and state.debug_enabled then
+    local prev = table.remove(state.debug_history)
+    if prev then
+      state.phase = prev
+      state.debug_skip_push = true
+      state.message = "Debug back: " .. tostring(prev)
+    end
     return
   end
 
@@ -1724,6 +1951,7 @@ function M.keypressed(key)
 
   if key == "i" and state.phase ~= "inventory" then
     state.view_prev = state.phase
+    state.inventory_return = state.phase
     state.phase = "inventory"
     return
   end
@@ -1731,6 +1959,12 @@ function M.keypressed(key)
   if key == "u" and #state.meta.side_pouch > 0 then
     state.view_prev = state.phase
     state.phase = "eat_side_dish"
+    return
+  end
+
+  if key == "o" and #state.meta.special_pouch > 0 then
+    state.view_prev = state.phase
+    begin_special_use(state.view_prev or "street_preview", 1)
     return
   end
 
@@ -1880,6 +2114,21 @@ function M.keypressed(key)
     return
   end
 
+  if state.phase == "quota_prompt" then
+    if key == "up" then
+      prompt_state.selected = math.max(1, prompt_state.selected - 1)
+    elseif key == "down" then
+      prompt_state.selected = math.min(#prompt_state.options, prompt_state.selected + 1)
+    elseif key == "return" or key == "space" then
+      local option = prompt_state.options[prompt_state.selected]
+      if option and option.action then
+        prompt_state.active = false
+        option.action()
+      end
+    end
+    return
+  end
+
   if state.phase == "street_preview" then
     if key == "m" then
       state.phase_before_map = "street_preview"
@@ -1904,14 +2153,14 @@ function M.keypressed(key)
 
   if state.phase == "inventory" then
     if key == "b" or key == "i" or key == "escape" then
-      state.phase = state.view_prev or "street_preview"
+      state.phase = state.inventory_return or state.view_prev or "street_preview"
       return
     end
     local index = tonumber(key)
     if index then
       local special = state.meta.special_pouch[index]
       if special then
-        begin_special_use("inventory", index)
+        begin_special_use(state.view_prev or "inventory", index)
       end
     end
     return
@@ -2177,16 +2426,7 @@ function M.keypressed(key)
   end
 end
 
-function M.mousepressed(x, y, button)
-  if USE_BALATRO_MODE then
-    if balatro_mode.mousepressed then
-      balatro_mode.mousepressed(x, y, button)
-    end
-    return
-  end
-end
-
-function M._draw()
+function M.draw()
   ui.draw_scoreboard(state)
   ui.draw_phase(state.phase, 30, 130)
   ui.draw_text_block({ state.message or "" }, 30, 160)
@@ -2355,7 +2595,7 @@ function M._draw()
     love.graphics.print("Side Dishes (" .. tostring(#state.meta.side_pouch) .. "/" .. tostring(state.meta.side_pouch_capacity) .. ")", 30, dishes_y)
     for i = 1, #state.meta.side_pouch do
       local item = state.meta.side_pouch[i]
-      love.graphics.print("- " .. item.name .. " - " .. item.effect, 30, dishes_y + 25 + (i - 1) * 18)
+      love.graphics.print(tostring(i) .. ") " .. item.name .. " - " .. item.effect, 30, dishes_y + 25 + (i - 1) * 18)
     end
     local specials_y = dishes_y + 25 + (#state.meta.side_pouch * 18) + 18
     love.graphics.print("Special Cards (" .. tostring(#state.meta.special_pouch) .. "/" .. tostring(state.meta.special_pouch_capacity) .. ")", 30, specials_y)
@@ -2363,7 +2603,7 @@ function M._draw()
       local item = state.meta.special_pouch[i]
       love.graphics.print(tostring(i) .. ") " .. item.name .. " - " .. item.effect, 30, specials_y + 25 + (i - 1) * 18)
     end
-    love.graphics.print("Press number to use Special. D to view deck. U to eat dish. B to return.", 30, specials_y + 25 + (#state.meta.special_pouch * 18) + 18)
+    love.graphics.print("U then number to eat dish. Number to use Special. D deck. B return.", 30, specials_y + 25 + (#state.meta.special_pouch * 18) + 18)
   elseif state.phase == "deck_view" then
     love.graphics.print("Deck Viewer", 30, 240)
     local entries = deck_entries()
@@ -2516,15 +2756,25 @@ function M._draw()
     end
   elseif state.phase == "run_end" then
     love.graphics.print("Final level: " .. tostring(state.level), 30, 240)
+  elseif state.phase == "quota_prompt" then
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print("Street Complete", 30, 240)
+    local y = 280
+    for i, option in ipairs(prompt_state.options) do
+      if i == prompt_state.selected then
+        love.graphics.setColor(0.3, 0.3, 0.5, 1)
+        love.graphics.rectangle("fill", 20, y - 5, 560, 40, 4)
+        love.graphics.setColor(1, 1, 1, 1)
+      end
+      love.graphics.print(option.text, 30, y)
+      if option.info then
+        love.graphics.setColor(0.7, 0.7, 0.7, 1)
+        love.graphics.print(option.info, 30, y + 18)
+        love.graphics.setColor(1, 1, 1, 1)
+      end
+      y = y + 50
+    end
   end
-end
-
-function M.draw()
-  if USE_BALATRO_MODE then
-    balatro_mode.draw()
-    return
-  end
-  M._draw()
 end
 
 return M

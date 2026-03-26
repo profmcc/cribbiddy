@@ -1,0 +1,7 @@
+{
+  "name": "cribbiddy-with-characters",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node --experimental-strip-types --test scoring/scoring.test.ts"
+  }
+}
